@@ -480,7 +480,7 @@ func transJsonObject(p *proto.Encoder, j *JsonIter, msg *Message) error {
 			if len(key) == 0 {
 				return nil
 			}
-			return io.ErrUnexpectedEOF
+			return ErrUnexpectedToken
 		case jsonlit.Comma, jsonlit.Colon:
 			// 忽略语法检查
 			continue
