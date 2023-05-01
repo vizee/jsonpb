@@ -253,7 +253,7 @@ func Test_transProtoMapCase(t *testing.T) {
 		{name: "stop", args: args{p: "8201050a01621002", tag: 17, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "0a01611001"}, want: `{"a":1}`},
 		{name: "int_key", args: args{p: "0a0608c803120162", tag: 1, entry: getTestMapEntry(Int32Kind, StringKind, nil), s: "087b120161"}, want: `{"123":"a","456":"b"}`},
 		{name: "bytes_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, BytesKind, nil), s: "0a0568656c6c6f1205776f726c64"}, want: `{"hello":"d29ybGQ="}`},
-		{name: "message_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, MessageKind, getTestSimpleMessage()), s: "0a0361626312090a03626f6210171801"}, want: `{"abc":{"name":"bob","age":23,"male":true}}`},
+		{name: "message_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, MessageKind, getTestSimpleMessage()), s: "0a0361626312090a03626f6210171801"}, want: `{"abc":{"name":"bob","age":23}}`},
 		{name: "default_key", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "107b"}, want: `{"":123}`},
 		{name: "default_int32_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "0a0161"}, want: `{"a":0}`},
 		{name: "default_string_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, StringKind, nil), s: "0a0161"}, want: `{"a":""}`},
@@ -285,7 +285,7 @@ func transProtoMessageCase(p string, msg *Message) (string, error) {
 func Test_transProtoMessageCase(t *testing.T) {
 	const (
 		complexProto       = `090000000000c05e40150000f642187b207b287b307b38f60140f6014d7b000000517b000000000000005d7b000000617b00000000000000680172036f6b6b7a030102038201050a016b10018a010e0a017512090a03616263101718018a01050a017612009201090a03656667101718019a0103010203a201090a03616263100c1801a20100a201070a036566671017`
-		complexWant        = `{"fdouble":123,"ffloat":123,"fint32":123,"fint64":123,"fuint32":123,"fuint64":123,"fsint32":123,"fsint64":123,"ffixed32":123,"ffixed64":123,"fsfixed32":123,"fsfixed64":123,"fbool":true,"fstring":"okk","fbytes":"AQID","fmap1":{"k":1},"fmap2":{"u":{"name":"abc","age":23,"male":true},"v":{}},"fsubmsg":{"name":"efg","age":23,"male":true},"fint32s":[1,2,3],"fitems":[{"name":"abc","age":12,"male":true},{},{"name":"efg","age":23}]}`
+		complexWant        = `{"fdouble":123,"ffloat":123,"fint32":123,"fint64":123,"fuint32":123,"fuint64":123,"fsint32":123,"fsint64":123,"ffixed32":123,"ffixed64":123,"fsfixed32":123,"fsfixed64":123,"fbool":true,"fstring":"okk","fbytes":"AQID","fmap1":{"k":1},"fmap2":{"u":{"name":"abc","age":23},"v":{}},"fsubmsg":{"name":"efg","age":23},"fint32s":[1,2,3],"fitems":[{"name":"abc","age":12},{},{"name":"efg","age":23}]}`
 		complexDefaultWant = `{"fdouble":0,"ffloat":0,"fint32":0,"fint64":0,"fuint32":0,"fuint64":0,"fsint32":0,"fsint64":0,"ffixed32":0,"ffixed64":0,"fsfixed32":0,"fsfixed64":0,"fbool":false,"fstring":"","fbytes":"","fmap1":{},"fmap2":{},"fsubmsg":{},"fint32s":[],"fitems":[]}`
 	)
 
@@ -300,8 +300,9 @@ func Test_transProtoMessageCase(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "empty", args: args{p: "", msg: getTestSimpleMessage()}, want: `{}`},
-		{name: "simple", args: args{p: "0a03626f6210171801", msg: getTestSimpleMessage()}, want: `{"name":"bob","age":23,"male":true}`},
-		{name: "emitted", args: args{p: "0a03626f6210170a03626f621801", msg: getTestSimpleMessage()}, want: `{"name":"bob","age":23,"male":true}`},
+		{name: "simple", args: args{p: "0a03626f6210171801", msg: getTestSimpleMessage()}, want: `{"name":"bob","age":23}`},
+		{name: "simple2", args: args{p: "0a03626f6210171801", msg: getTestSimpleMessage2()}, want: `{"male":true}`},
+		{name: "emitted", args: args{p: "0a03626f6210170a03626f621801", msg: getTestSimpleMessage()}, want: `{"name":"bob","age":23}`},
 		{name: "complex", args: args{p: complexProto, msg: getTestComplexMessage()}, want: complexWant},
 		{name: "default", args: args{p: "", msg: getTestComplexMessage()}, want: complexDefaultWant},
 		{name: "eof", args: args{p: "0a", msg: getTestComplexMessage()}, wantErr: true},

@@ -304,7 +304,7 @@ func transJsonObjectCase(j string, msg *Message) (string, error) {
 func Test_transJsonObjectCase(t *testing.T) {
 	const (
 		complexJson = `{"noexisted":null,"fdouble":123,"ffloat":123,"fint32":123,"fint64":123,"fuint32":123,"fuint64":123,"fsint32":123,"fsint64":123,"ffixed32":123,"ffixed64":123,"fsfixed32":123,"fsfixed64":123,"fbool":true,"fstring":"okk","fbytes":"AQID","fmap1":{"k":1},"fmap2":{"u":{"name":"abc","age":23,"male":true},"v":null},"fsubmsg":{"name":"efg","age":23,"male":true},"fint32s":[1,2,3],"fitems":[{"name":"abc","age":12,"male":true},null,{"name":"efg","age":23}]}`
-		complexWant = `090000000000c05e40150000f642187b207b287b307b38f60140f6014d7b000000517b000000000000005d7b000000617b00000000000000680172036f6b6b7a030102038201050a016b10018a010e0a017512090a03616263101718018a01030a01769201090a03656667101718019a0103010203a201090a03616263100c1801a20100a201070a036566671017`
+		complexWant = `090000000000c05e40150000f642187b207b287b307b38f60140f6014d7b000000517b000000000000005d7b000000617b00000000000000680172036f6b6b7a030102038201050a016b10018a010c0a017512070a0361626310178a01030a01769201070a0365666710179a0103010203a201070a03616263100ca20100a201070a036566671017`
 	)
 	type args struct {
 		j   string
@@ -317,7 +317,8 @@ func Test_transJsonObjectCase(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "empty", args: args{j: `{}`, msg: getTestSimpleMessage()}, want: ""},
-		{name: "simple", args: args{j: `{"name":"string","age":123,"male":true}`, msg: getTestSimpleMessage()}, want: "0a06737472696e67107b1801"},
+		{name: "simple", args: args{j: `{"name":"string","age":123,"male":true}`, msg: getTestSimpleMessage()}, want: "0a06737472696e67107b"},
+		{name: "simple2", args: args{j: `{"name":"string","age":123,"male":true}`, msg: getTestSimpleMessage2()}, want: "1801"},
 		{name: "complex", args: args{j: complexJson, msg: getTestComplexMessage()}, want: complexWant},
 		{name: "eof", args: args{j: `{`, msg: getTestSimpleMessage()}, wantErr: true},
 	}

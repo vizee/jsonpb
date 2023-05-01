@@ -488,7 +488,7 @@ func transJsonObject(p *proto.Encoder, j *JsonIter, msg *Message) error {
 			if len(key) != 0 {
 				// 暂不转义 key
 				field := msg.FieldByName(asString(key[1 : len(key)-1]))
-				if field != nil {
+				if field != nil && field.Omit != OmitAlways {
 					err := transJsonField(p, j, field, lead, s)
 					if err != nil {
 						return err

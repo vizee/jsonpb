@@ -2,9 +2,17 @@ package jsonpb
 
 func getTestSimpleMessage() *Message {
 	return NewMessage("Simple", []Field{
-		{Name: "name", Tag: 1, Kind: StringKind, OmitEmpty: true},
-		{Name: "age", Tag: 2, Kind: Int32Kind, OmitEmpty: true},
-		{Name: "male", Tag: 3, Kind: BoolKind, OmitEmpty: true},
+		{Name: "name", Tag: 1, Kind: StringKind, Omit: OmitEmpty},
+		{Name: "age", Tag: 2, Kind: Int32Kind, Omit: OmitEmpty},
+		{Name: "male", Tag: 3, Kind: BoolKind, Omit: OmitAlways},
+	}, true, true)
+}
+
+func getTestSimpleMessage2() *Message {
+	return NewMessage("Simple", []Field{
+		{Name: "name", Tag: 1, Kind: StringKind, Omit: OmitAlways},
+		{Name: "age", Tag: 2, Kind: Int32Kind, Omit: OmitAlways},
+		{Name: "male", Tag: 3, Kind: BoolKind},
 	}, true, true)
 }
 

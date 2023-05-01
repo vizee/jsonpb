@@ -343,7 +343,7 @@ func transProtoMessage(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
 			return ErrInvalidWireType
 		}
 
-		if emitted[fieldIdx] {
+		if emitted[fieldIdx] || field.Omit == OmitAlways {
 			continue
 		}
 
@@ -388,7 +388,7 @@ func transProtoMessage(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
 
 	for i := range msg.Fields {
 		field := &msg.Fields[i]
-		if emitted[i] || field.OmitEmpty {
+		if emitted[i] || field.Omit >= OmitEmpty {
 			continue
 		}
 		if !more {
@@ -407,6 +407,7 @@ func transProtoMessage(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
 	return nil
 }
 
+// TranscodeToJson 通过 proto.Decoder 解析 pb，并且追加到 JsonBuilder 中
 func TranscodeToJson(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
 	return transProtoMessage(j, p, msg)
 }

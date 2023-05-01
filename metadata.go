@@ -142,11 +142,22 @@ func (m *Message) FieldByName(name string) *Field {
 	return nil
 }
 
+type OmitRule uint8
+
+const (
+	// OmitProtoEmpty 只在 pb 输出"空值"时跳过字段
+	OmitProtoEmpty OmitRule = iota
+	// OmitEmpty 在 pb 和 json 输出"空值"跳过字段
+	OmitEmpty
+	// OmitAlways 总是跳过字段
+	OmitAlways
+)
+
 type Field struct {
-	Name      string
-	Kind      Kind
-	Ref       *Message
-	Tag       uint32
-	Repeated  bool
-	OmitEmpty bool
+	Name     string
+	Kind     Kind
+	Ref      *Message
+	Tag      uint32
+	Repeated bool
+	Omit     OmitRule
 }
