@@ -1,5 +1,5 @@
 module github.com/vizee/jsonpb
 
-go 1.20
+go 1.23
 
-require google.golang.org/protobuf v1.30.0
+require google.golang.org/protobuf v1.36.11
