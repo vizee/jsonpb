@@ -19,6 +19,12 @@ type protoValue struct {
 	s []byte
 }
 
+// fieldScan 记录某个字段在 wire 流中的一次出现。
+type fieldScan struct {
+	wire protowire.Type
+	val  protoValue
+}
+
 func readProtoValue(p *proto.Decoder, wire protowire.Type) (val protoValue, e int) {
 	switch wire {
 	case protowire.VarintType:
@@ -58,11 +64,28 @@ var wireTypeOfKind = [...]protowire.Type{
 }
 
 func getFieldWireType(kind Kind, repeated bool) protowire.Type {
-	// 如果字段设置 repeated，那么值应该是 packed/string/bytes/message，所以 wire 一定是 BytesType
+	// 如果字段设置 repeated，那么 packed/string/bytes/message 的 wire 一定是 BytesType
+	// （但 repeated 标量也允许 unpacked 编码，见 acceptFieldWire）。
 	if !repeated && int(kind) < len(wireTypeOfKind) {
 		return wireTypeOfKind[kind]
 	}
 	return protowire.BytesType
+}
+
+// acceptFieldWire 判断 wire 类型是否可被该字段接受。
+// 重复标量字段允许 packed (BytesType) 或 unpacked (标量自身 wire 类型) 两种编码，
+// 这是 proto3 规范要求的：解析器必须同时接受两种编码。
+func acceptFieldWire(field *Field, wire protowire.Type) bool {
+	if field.Repeated {
+		if wire == protowire.BytesType {
+			return true
+		}
+		if int(field.Kind) < len(wireTypeOfKind) && wireTypeOfKind[field.Kind] == wire {
+			return true
+		}
+		return false
+	}
+	return getFieldWireType(field.Kind, false) == wire
 }
 
 var defaultValues = [...]string{
@@ -93,177 +116,81 @@ func writeDefaultValue(j *JsonBuilder, repeated bool, kind Kind) {
 	}
 }
 
-func transProtoMap(j *JsonBuilder, p *proto.Decoder, tag uint32, entry *Message, s []byte) error {
-	j.AppendByte('{')
-
+// transProtoMapEntry 把一条 map entry 的字节解码并追加 "key":value 到 j
+// （不含外层大括号与元素间逗号）。
+func transProtoMapEntry(j *JsonBuilder, entry *Message, s []byte) error {
 	keyField, valueField := entry.FieldByTag(1), entry.FieldByTag(2)
 	// assert(keyField != nil && valueField != nil)
 	keyWire := getFieldWireType(keyField.Kind, keyField.Repeated)
 	valueWire := getFieldWireType(valueField.Kind, valueField.Repeated)
 	// 暂不检查 keyField.Kind
 
-	more := false
-	for {
-		if !more {
-			more = true
-		} else {
-			j.AppendByte(',')
-		}
-
-		// 上下文比较复杂，直接嵌套逻辑读取 KV
-
-		var values [2]protoValue
-		assigned := 0
-		dec := proto.NewDecoder(s)
-		for !dec.EOF() && assigned != 3 {
-			tag, wire, e := dec.ReadTag()
-			if e < 0 {
-				return protowire.ParseError(e)
-			}
-			val, e := readProtoValue(dec, wire)
-			if e < 0 {
-				return protowire.ParseError(e)
-			}
-			switch tag {
-			case 1:
-				if wire != keyWire {
-					return ErrInvalidWireType
-				}
-				values[0] = val
-				assigned |= 1
-			case 2:
-				if wire != valueWire {
-					return ErrInvalidWireType
-				}
-				values[1] = val
-				assigned |= 2
-			}
-		}
-
-		if assigned&1 != 0 {
-			if keyField.Kind == StringKind {
-				transProtoString(j, values[0].s)
-			} else {
-				j.AppendByte('"')
-				transProtoSimpleValue(j, keyField.Kind, values[0].x)
-				j.AppendByte('"')
-			}
-		} else {
-			j.AppendString(`""`)
-		}
-
-		j.AppendByte(':')
-
-		if assigned&2 != 0 {
-			switch valueField.Kind {
-			case StringKind:
-				transProtoString(j, values[1].s)
-			case BytesKind:
-				transProtoBytes(j, values[1].s)
-			case MessageKind:
-				err := transProtoMessage(j, proto.NewDecoder(values[1].s), valueField.Ref)
-				if err != nil {
-					return err
-				}
-			default:
-				transProtoSimpleValue(j, valueField.Kind, values[1].x)
-			}
-		} else {
-			writeDefaultValue(j, valueField.Repeated, valueField.Kind)
-		}
-
-		if p.EOF() {
-			break
-		}
-		nextTag, wire, e := p.PeekTag()
+	var values [2]protoValue
+	assigned := 0
+	dec := proto.NewDecoder(s)
+	for !dec.EOF() && assigned != 3 {
+		tag, wire, e := dec.ReadTag()
 		if e < 0 {
 			return protowire.ParseError(e)
 		}
-		if nextTag != tag {
-			break
-		}
-		if wire != protowire.BytesType {
-			return ErrInvalidWireType
-		}
-		p.ReadVarint() // consume tag
-		s, e = p.ReadBytes()
+		val, e := readProtoValue(dec, wire)
 		if e < 0 {
 			return protowire.ParseError(e)
+		}
+		switch tag {
+		case 1:
+			if wire != keyWire {
+				return ErrInvalidWireType
+			}
+			values[0] = val
+			assigned |= 1
+		case 2:
+			if wire != valueWire {
+				return ErrInvalidWireType
+			}
+			values[1] = val
+			assigned |= 2
 		}
 	}
 
-	j.AppendByte('}')
-	return nil
-}
-
-func transProtoRepeatedBytes(j *JsonBuilder, p *proto.Decoder, field *Field, s []byte) error {
-	j.AppendByte('[')
-
-	more := false
-	for {
-		if !more {
-			more = true
+	// key 缺省时按字段类型输出默认值（数值 key 为 "0"，字符串 key 为 ""）
+	if assigned&1 != 0 {
+		if keyField.Kind == StringKind {
+			transProtoString(j, values[0].s)
 		} else {
-			j.AppendByte(',')
+			j.AppendByte('"')
+			transProtoSimpleValue(j, keyField.Kind, values[0].x)
+			j.AppendByte('"')
 		}
+	} else {
+		if keyField.Kind == StringKind {
+			j.AppendString(`""`)
+		} else {
+			j.AppendByte('"')
+			transProtoSimpleValue(j, keyField.Kind, 0)
+			j.AppendByte('"')
+		}
+	}
 
-		switch field.Kind {
+	j.AppendByte(':')
+
+	if assigned&2 != 0 {
+		switch valueField.Kind {
 		case StringKind:
-			transProtoString(j, s)
+			transProtoString(j, values[1].s)
 		case BytesKind:
-			transProtoBytes(j, s)
+			transProtoBytes(j, values[1].s)
 		case MessageKind:
-			err := transProtoMessage(j, proto.NewDecoder(s), field.Ref)
+			err := transProtoMessage(j, proto.NewDecoder(values[1].s), valueField.Ref)
 			if err != nil {
 				return err
 			}
+		default:
+			transProtoSimpleValue(j, valueField.Kind, values[1].x)
 		}
-
-		if p.EOF() {
-			break
-		}
-		tag, wire, e := p.PeekTag()
-		if e < 0 {
-			return protowire.ParseError(e)
-		}
-		if tag != field.Tag {
-			break
-		}
-		if wire != protowire.BytesType {
-			return ErrInvalidWireType
-		}
-		p.ReadVarint() // consume tag
-		s, e = p.ReadBytes()
-		if e < 0 {
-			return protowire.ParseError(e)
-		}
+	} else {
+		writeDefaultValue(j, valueField.Repeated, valueField.Kind)
 	}
-
-	j.AppendByte(']')
-	return nil
-}
-
-func transProtoPackedArray(j *JsonBuilder, s []byte, field *Field) error {
-	p := proto.NewDecoder(s)
-
-	j.AppendByte('[')
-
-	wire := getFieldWireType(field.Kind, false)
-	more := false
-	for !p.EOF() {
-		if !more {
-			more = true
-		} else {
-			j.AppendByte(',')
-		}
-		val, e := readProtoValue(p, wire)
-		if e < 0 {
-			return protowire.ParseError(e)
-		}
-		transProtoSimpleValue(j, field.Kind, val.x)
-	}
-
-	j.AppendByte(']')
 	return nil
 }
 
@@ -284,12 +211,27 @@ func transProtoString(j *JsonBuilder, s []byte) {
 	j.AppendByte('"')
 }
 
+// appendFloat 把浮点数按 protobuf JSON 规范追加到 j：
+// NaN/±Inf 输出为 "NaN"/"Infinity"/"-Infinity"，其余用最短 'f' 表示。
+func appendFloat(j *JsonBuilder, f float64, bits int) {
+	switch {
+	case math.IsNaN(f):
+		j.AppendString("NaN")
+	case math.IsInf(f, 1):
+		j.AppendString("Infinity")
+	case math.IsInf(f, -1):
+		j.AppendString("-Infinity")
+	default:
+		j.buf = strconv.AppendFloat(j.buf, f, 'f', -1, bits)
+	}
+}
+
 func transProtoSimpleValue(j *JsonBuilder, kind Kind, x uint64) {
 	switch kind {
 	case DoubleKind:
-		j.buf = strconv.AppendFloat(j.buf, math.Float64frombits(x), 'f', -1, 64)
+		appendFloat(j, math.Float64frombits(x), 64)
 	case FloatKind:
-		j.buf = strconv.AppendFloat(j.buf, float64(math.Float32frombits(uint32(x))), 'f', -1, 32)
+		appendFloat(j, float64(math.Float32frombits(uint32(x))), 32)
 	case Int32Kind, Int64Kind, Sfixed64Kind:
 		j.buf = strconv.AppendInt(j.buf, int64(x), 10)
 	case Uint32Kind, Uint64Kind, Fixed32Kind, Fixed64Kind:
@@ -307,102 +249,172 @@ func transProtoSimpleValue(j *JsonBuilder, kind Kind, x uint64) {
 	}
 }
 
-func transProtoMessage(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
-	j.AppendByte('{')
+// transProtoSingular 输出一个非重复字段的单值。
+func transProtoSingular(j *JsonBuilder, field *Field, o fieldScan) error {
+	switch field.Kind {
+	case StringKind:
+		transProtoString(j, o.val.s)
+	case BytesKind:
+		transProtoBytes(j, o.val.s)
+	case MessageKind:
+		return transProtoMessage(j, proto.NewDecoder(o.val.s), field.Ref)
+	default:
+		transProtoSimpleValue(j, field.Kind, o.val.x)
+	}
+	return nil
+}
 
+// transProtoRepeated 输出一个重复字段的所有出现（跨非连续位置已拼接），含外层方括号。
+func transProtoRepeated(j *JsonBuilder, field *Field, occ []fieldScan) error {
+	j.AppendByte('[')
+	first := true
+	sep := func() {
+		if first {
+			first = false
+		} else {
+			j.AppendByte(',')
+		}
+	}
+	for _, o := range occ {
+		switch field.Kind {
+		case StringKind:
+			sep()
+			transProtoString(j, o.val.s)
+		case BytesKind:
+			sep()
+			transProtoBytes(j, o.val.s)
+		case MessageKind:
+			sep()
+			if err := transProtoMessage(j, proto.NewDecoder(o.val.s), field.Ref); err != nil {
+				return err
+			}
+		default:
+			// 数值/bool：可能是 packed (BytesType) 或 unpacked (单元素)
+			if int(field.Kind) >= len(wireTypeOfKind) {
+				return ErrTypeMismatch
+			}
+			if o.wire == protowire.BytesType {
+				dec := proto.NewDecoder(o.val.s)
+				elemWire := wireTypeOfKind[field.Kind]
+				for !dec.EOF() {
+					v, e := readProtoValue(dec, elemWire)
+					if e < 0 {
+						return protowire.ParseError(e)
+					}
+					sep()
+					transProtoSimpleValue(j, field.Kind, v.x)
+				}
+			} else {
+				sep()
+				transProtoSimpleValue(j, field.Kind, o.val.x)
+			}
+		}
+	}
+	j.AppendByte(']')
+	return nil
+}
+
+func transProtoMessage(j *JsonBuilder, p *proto.Decoder, msg *Message) error {
+	// 两遍处理：先收集每个字段的所有出现，再按字段定义顺序输出。
+	// 这样才能正确拼接非连续出现的重复字段，并对非重复字段实现 last-one-wins。
 	const preAllocSize = 16
-	var (
-		preAlloc [preAllocSize]bool
-		emitted  []bool
-	)
+	var preAlloc [preAllocSize][]fieldScan
+	var occurrences [][]fieldScan
 	if len(msg.Fields) <= preAllocSize {
-		emitted = preAlloc[:]
+		occurrences = preAlloc[:]
 	} else {
-		emitted = make([]bool, len(msg.Fields))
+		occurrences = make([][]fieldScan, len(msg.Fields))
 	}
 
-	more := false
 	for !p.EOF() {
 		tag, wire, e := p.ReadTag()
 		if e < 0 {
 			return protowire.ParseError(e)
 		}
-
 		val, e := readProtoValue(p, wire)
 		if e < 0 {
 			return protowire.ParseError(e)
 		}
-
 		fieldIdx := msg.FieldIndexByTag(tag)
 		if fieldIdx < 0 {
 			continue
 		}
 		field := &msg.Fields[fieldIdx]
-		expectedWire := getFieldWireType(field.Kind, field.Repeated)
-		if expectedWire != wire {
+		if !acceptFieldWire(field, wire) {
 			return ErrInvalidWireType
 		}
-
-		if emitted[fieldIdx] || field.Omit == OmitAlways {
-			continue
-		}
-
-		if !more {
-			more = true
-		} else {
-			j.AppendByte(',')
-		}
-		j.AppendByte('"')
-		j.AppendString(field.Name)
-		j.AppendByte('"')
-		j.AppendByte(':')
-
-		var err error
-		if field.Repeated {
-			switch field.Kind {
-			case StringKind, BytesKind, MessageKind:
-				err = transProtoRepeatedBytes(j, p, field, val.s)
-			default:
-				err = transProtoPackedArray(j, val.s, field)
-			}
-		} else if field.Kind == MapKind {
-			err = transProtoMap(j, p, field.Tag, field.Ref, val.s)
-		} else {
-			switch field.Kind {
-			case StringKind:
-				transProtoString(j, val.s)
-			case BytesKind:
-				transProtoBytes(j, val.s)
-			case MessageKind:
-				err = transProtoMessage(j, proto.NewDecoder(val.s), field.Ref)
-			default:
-				transProtoSimpleValue(j, field.Kind, val.x)
-			}
-		}
-		if err != nil {
-			return err
-		}
-
-		emitted[fieldIdx] = true
+		occurrences[fieldIdx] = append(occurrences[fieldIdx], fieldScan{wire: wire, val: val})
 	}
 
+	j.AppendByte('{')
+	more := false
+	emitHeader := func(name string) {
+		if more {
+			j.AppendByte(',')
+		} else {
+			more = true
+		}
+		j.AppendByte('"')
+		j.AppendString(name)
+		j.AppendByte('"')
+		j.AppendByte(':')
+	}
 	for i := range msg.Fields {
 		field := &msg.Fields[i]
-		if emitted[i] || field.Omit >= OmitEmpty {
+		if field.Omit == OmitAlways {
 			continue
 		}
-		if !more {
-			more = true
-		} else {
-			j.AppendByte(',')
+		occ := occurrences[i]
+		switch {
+		case field.Kind == MapKind:
+			if len(occ) == 0 {
+				if field.Omit >= OmitEmpty {
+					continue
+				}
+				emitHeader(field.Name)
+				j.AppendString("{}")
+				continue
+			}
+			emitHeader(field.Name)
+			j.AppendByte('{')
+			for k, o := range occ {
+				if k > 0 {
+					j.AppendByte(',')
+				}
+				if err := transProtoMapEntry(j, field.Ref, o.val.s); err != nil {
+					return err
+				}
+			}
+			j.AppendByte('}')
+		case field.Repeated:
+			if len(occ) == 0 {
+				if field.Omit >= OmitEmpty {
+					continue
+				}
+				emitHeader(field.Name)
+				j.AppendString("[]")
+				continue
+			}
+			emitHeader(field.Name)
+			if err := transProtoRepeated(j, field, occ); err != nil {
+				return err
+			}
+		default:
+			if len(occ) == 0 {
+				if field.Omit >= OmitEmpty {
+					continue
+				}
+				emitHeader(field.Name)
+				writeDefaultValue(j, false, field.Kind)
+				continue
+			}
+			// proto3 语义：非重复字段重复出现时 last-one-wins。
+			emitHeader(field.Name)
+			if err := transProtoSingular(j, field, occ[len(occ)-1]); err != nil {
+				return err
+			}
 		}
-		j.AppendByte('"')
-		j.AppendString(field.Name)
-		j.AppendByte('"')
-		j.AppendByte(':')
-		writeDefaultValue(j, field.Repeated, field.Kind)
 	}
-
 	j.AppendByte('}')
 	return nil
 }

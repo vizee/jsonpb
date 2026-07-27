@@ -69,3 +69,47 @@ func TestMessage_sparseTagIndex(t *testing.T) {
 		})
 	}
 }
+
+// #10: 含 tag 0 的 dense 索引（len(tagIdx)==len(Fields)）不应误走二分路径。
+func TestMessage_denseWithTag0(t *testing.T) {
+	m := NewMessage("M", []Field{
+		{Name: "c", Tag: 2},
+		{Name: "a", Tag: 0},
+		{Name: "b", Tag: 1},
+	}, true, true)
+	// maxTag=2, len(Fields)=3 => dense，且 len(tagIdx)=3 == len(Fields)
+	if m.tagIdxSparse {
+		t.Fatal("expected dense index")
+	}
+	cases := []struct {
+		tag  uint32
+		name string
+	}{
+		{0, "a"}, {1, "b"}, {2, "c"}, {3, ""},
+	}
+	for _, c := range cases {
+		f := m.FieldByTag(c.tag)
+		if c.name == "" {
+			if f != nil {
+				t.Errorf("tag %d: expected nil, got %s", c.tag, f.Name)
+			}
+		} else if f == nil || f.Name != c.name {
+			t.Errorf("tag %d: expected %s, got %v", c.tag, c.name, f)
+		}
+	}
+}
+
+// #10: 重复 tag（非法元数据）不应导致 panic（旧实现会因二分查找访问 -1 槽而越界）。
+func TestMessage_duplicateTagNoPanic(t *testing.T) {
+	m := NewMessage("M", []Field{
+		{Name: "a", Tag: 0},
+		{Name: "b", Tag: 0},
+		{Name: "c", Tag: 2},
+	}, true, true)
+	if f := m.FieldByTag(2); f == nil || f.Name != "c" {
+		t.Errorf("tag 2: expected c, got %v", f)
+	}
+	if f := m.FieldByTag(1); f != nil {
+		t.Errorf("tag 1: expected nil, got %s", f.Name)
+	}
+}

@@ -32,8 +32,9 @@ type Message struct {
 	Name   string
 	Fields []Field
 
-	tagIdx  []int
-	nameIdx map[string]int
+	tagIdx       []int
+	tagIdxSparse bool // true 表示 tagIdx 是按 tag 排序的稀疏索引（二分查找）；false 表示 dense 直接索引
+	nameIdx      map[string]int
 }
 
 func NewMessage(name string, fields []Field, indexTag bool, indexName bool) *Message {
@@ -67,6 +68,7 @@ func (m *Message) BakeTagIndex() {
 		for i := range fields {
 			tagIdx[fields[i].Tag] = i
 		}
+		m.tagIdxSparse = false
 	} else {
 		// sparse-index
 		tagIdx = make([]int, len(fields))
@@ -76,12 +78,13 @@ func (m *Message) BakeTagIndex() {
 		sort.Slice(tagIdx, func(i, j int) bool {
 			return fields[tagIdx[i]].Tag < fields[tagIdx[j]].Tag
 		})
+		m.tagIdxSparse = true
 	}
 	m.tagIdx = tagIdx
 }
 
 func (m *Message) FieldIndexByTag(tag uint32) int {
-	if len(m.tagIdx) == len(m.Fields) {
+	if m.tagIdxSparse {
 		l, r := 0, len(m.tagIdx)-1
 		for l <= r {
 			mid := (l + r) / 2
@@ -95,16 +98,29 @@ func (m *Message) FieldIndexByTag(tag uint32) int {
 				l = mid + 1
 			}
 		}
-	} else if int(tag) < len(m.tagIdx) {
-		idx := m.tagIdx[tag]
-		if idx >= 0 {
-			return idx
-		}
-	} else {
+		return -1
+	}
+	if len(m.tagIdx) == 0 {
+		// 未建索引：线性查找
 		for i := 0; i < len(m.Fields); i++ {
 			if m.Fields[i].Tag == tag {
 				return i
 			}
+		}
+		return -1
+	}
+	// dense 直接索引
+	if int(tag) < len(m.tagIdx) {
+		idx := m.tagIdx[tag]
+		if idx >= 0 {
+			return idx
+		}
+		return -1
+	}
+	// tag 超出 dense 范围：线性兜底
+	for i := 0; i < len(m.Fields); i++ {
+		if m.Fields[i].Tag == tag {
+			return i
 		}
 	}
 	return -1

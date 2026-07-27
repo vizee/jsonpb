@@ -149,10 +149,31 @@ func Test_transProtoSimpleValueCase(t *testing.T) {
 	}
 }
 
-func transProtoRepeatedBytesCase(p string, field *Field, s string) (string, error) {
+// splitBytesElements 把一段由若干 (tag, len, bytes) 组成的 proto 流拆成各元素的 bytes。
+func splitBytesElements(p string) [][]byte {
+	dec := proto.NewDecoder(decodeBytes(p))
+	var out [][]byte
+	for !dec.EOF() {
+		_, _, e := dec.ReadTag()
+		if e < 0 {
+			break
+		}
+		b, e := dec.ReadBytes()
+		if e < 0 {
+			break
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+func transProtoRepeatedCase(p string, field *Field, s string) (string, error) {
+	occ := []fieldScan{{wire: protowire.BytesType, val: protoValue{s: decodeBytes(s)}}}
+	for _, e := range splitBytesElements(p) {
+		occ = append(occ, fieldScan{wire: protowire.BytesType, val: protoValue{s: e}})
+	}
 	var j JsonBuilder
-	err := transProtoRepeatedBytes(&j, proto.NewDecoder(decodeBytes(p)), field, decodeBytes(s))
-	if err != nil {
+	if err := transProtoRepeated(&j, field, occ); err != nil {
 		return "", err
 	}
 	return j.String(), nil
@@ -176,22 +197,22 @@ func Test_transProtoRepeatedBytesCase(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := transProtoRepeatedBytesCase(tt.args.p, tt.args.field, tt.args.s)
+			got, err := transProtoRepeatedCase(tt.args.p, tt.args.field, tt.args.s)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("transProtoRepeatedBytesCase() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("transProtoRepeatedCase() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if got != tt.want {
-				t.Errorf("transProtoRepeatedBytesCase() = %v, want %v", got, tt.want)
+				t.Errorf("transProtoRepeatedCase() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 func transProtoPackedArrayCase(p string, field *Field) (string, error) {
+	occ := []fieldScan{{wire: protowire.BytesType, val: protoValue{s: decodeBytes(p)}}}
 	var j JsonBuilder
-	err := transProtoPackedArray(&j, decodeBytes(p), field)
-	if err != nil {
+	if err := transProtoRepeated(&j, field, occ); err != nil {
 		return "", err
 	}
 	return j.String(), nil
@@ -227,11 +248,20 @@ func Test_transProtoPackedArrayCase(t *testing.T) {
 }
 
 func transProtoMapCase(p string, tag uint32, entry *Message, s string) (string, error) {
+	_ = tag
+	entries := [][]byte{decodeBytes(s)}
+	entries = append(entries, splitBytesElements(p)...)
 	var j JsonBuilder
-	err := transProtoMap(&j, proto.NewDecoder(decodeBytes(p)), tag, entry, decodeBytes(s))
-	if err != nil {
-		return "", err
+	j.AppendByte('{')
+	for k, e := range entries {
+		if k > 0 {
+			j.AppendByte(',')
+		}
+		if err := transProtoMapEntry(&j, entry, e); err != nil {
+			return "", err
+		}
 	}
+	j.AppendByte('}')
 	return j.String(), nil
 }
 
@@ -250,11 +280,11 @@ func Test_transProtoMapCase(t *testing.T) {
 	}{
 		{name: "empty", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: ""}, want: `{"":0}`},
 		{name: "simple", args: args{p: "8201050a01621002", tag: 16, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "0a01611001"}, want: `{"a":1,"b":2}`},
-		{name: "stop", args: args{p: "8201050a01621002", tag: 17, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "0a01611001"}, want: `{"a":1}`},
 		{name: "int_key", args: args{p: "0a0608c803120162", tag: 1, entry: getTestMapEntry(Int32Kind, StringKind, nil), s: "087b120161"}, want: `{"123":"a","456":"b"}`},
 		{name: "bytes_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, BytesKind, nil), s: "0a0568656c6c6f1205776f726c64"}, want: `{"hello":"d29ybGQ="}`},
 		{name: "message_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, MessageKind, getTestSimpleMessage()), s: "0a0361626312090a03626f6210171801"}, want: `{"abc":{"name":"bob","age":23}}`},
 		{name: "default_key", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "107b"}, want: `{"":123}`},
+		{name: "default_numeric_key", args: args{p: "", tag: 1, entry: getTestMapEntry(Int32Kind, Int32Kind, nil), s: "1007"}, want: `{"0":7}`},
 		{name: "default_int32_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, Int32Kind, nil), s: "0a0161"}, want: `{"a":0}`},
 		{name: "default_string_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, StringKind, nil), s: "0a0161"}, want: `{"a":""}`},
 		{name: "default_message_value", args: args{p: "", tag: 1, entry: getTestMapEntry(StringKind, MessageKind, getTestSimpleMessage()), s: "0a0161"}, want: `{"a":{}}`},

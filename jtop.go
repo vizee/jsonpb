@@ -250,13 +250,14 @@ func transJsonToMap(p *proto.Encoder, j *JsonIter, tag uint32, entry *Message) e
 			} else if lead == jsonlit.String {
 				buf.Clear()
 				if keyField.Kind == StringKind {
-					err := transJsonString(&buf, 1, true, s)
+					// map 的 key 必须始终写出（即使为空串），否则默认 key+默认 value 的 entry 会被丢弃
+					err := transJsonString(&buf, 1, false, s)
 					if err != nil {
 						return err
 					}
 				} else if IsNumericKind(keyField.Kind) {
-					// 允许把 json key 转为将数值类型的 map key
-					err := transJsonNumeric(&buf, 1, keyField.Kind, s[1:len(s)-1])
+					// 允许把 json key 转为将数值类型的 map key；omitEmpty=false 保证 0 键不被丢弃
+					err := transJsonNumeric(&buf, 1, keyField.Kind, s[1:len(s)-1], false)
 					if err != nil {
 						return err
 					}
@@ -272,12 +273,32 @@ func transJsonToMap(p *proto.Encoder, j *JsonIter, tag uint32, entry *Message) e
 	return io.ErrUnexpectedEOF
 }
 
-func transJsonNumeric(p *proto.Encoder, tag uint32, kind Kind, s []byte) error {
+// isNumericZero 判断 JSON 数值字面量是否表示零。
+// 浮点类型接受 0、0.0、0e0、-0 等形式；整数类型仅接受 "0"，
+// 以便对 "0.0" 这类非法整数字面量仍能走后续解析报错。
+func isNumericZero(s []byte, kind Kind) bool {
+	if kind == DoubleKind || kind == FloatKind {
+		hasZero := false
+		for _, c := range s {
+			if c >= '1' && c <= '9' {
+				return false
+			}
+			if c == '0' {
+				hasZero = true
+			}
+		}
+		return hasZero
+	}
+	return len(s) == 1 && s[0] == '0'
+}
+
+func transJsonNumeric(p *proto.Encoder, tag uint32, kind Kind, s []byte, omitEmpty bool) error {
 	if !IsNumericKind(kind) {
 		return ErrTypeMismatch
 	}
-	// 提前检查 0 值
-	if len(s) == 1 && s[0] == '0' {
+	// 提前检查 0 值：仅当 omitEmpty 时跳过（proto3 默认值不序列化）。
+	// map 的 key 必须始终写出，因此传 omitEmpty=false。
+	if omitEmpty && isNumericZero(s, kind) {
 		return nil
 	}
 	switch kind {
@@ -395,7 +416,7 @@ func transJsonField(p *proto.Encoder, j *JsonIter, field *Field, lead jsonlit.Ki
 			return ErrTypeMismatch
 		}
 	case jsonlit.Number:
-		return transJsonNumeric(p, field.Tag, field.Kind, s)
+		return transJsonNumeric(p, field.Tag, field.Kind, s, true)
 	case jsonlit.Bool:
 		if field.Kind == BoolKind {
 			if len(s) == 4 {

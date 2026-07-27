@@ -46,7 +46,14 @@ func (it *Iter[S]) nextString() (Kind, S) {
 	b := it.p
 	p := it.p + 1
 	for p < len(it.s) {
-		if it.s[p] == '"' && it.s[p-1] != '\\' {
+		c := it.s[p]
+		if c == '\\' {
+			// 跳过转义字符的下一个字符，避免把 \" 误判为闭合引号，
+			// 也避免 \\<引号> 把闭合引号当成被转义的字符。
+			p += 2
+			continue
+		}
+		if c == '"' {
 			it.p = p + 1
 			return String, it.s[b:it.p]
 		}

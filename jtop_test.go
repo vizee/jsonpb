@@ -128,7 +128,7 @@ func Test_transJsonStringCase(t *testing.T) {
 
 func transJsonNumericCase(tag uint32, kind Kind, s []byte) (string, error) {
 	var buf proto.Encoder
-	err := transJsonNumeric(&buf, tag, kind, s)
+	err := transJsonNumeric(&buf, tag, kind, s, true)
 	if err != nil {
 		return "", err
 	}
